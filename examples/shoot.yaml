@@ -11,9 +11,13 @@ spec:
     - type: otelcol
       providerConfig:
         apiVersion: otelcol.extensions.gardener.cloud/v1alpha1
-        kind: ExampleConfig
+        kind: CollectorConfig
         spec:
-          foo: bar
+          exporters:
+            # OTLP gRPC exporter settings
+            otlp: {}
+            # OTLP HTTP exporter settings
+            otlphttp: {}
   cloudProfile:
     name: local
     kind: CloudProfile
