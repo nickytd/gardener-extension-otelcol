@@ -79,6 +79,8 @@ const (
 	secretNameCACertificate = "ca-" + Name
 	// secretNameServerCertificate is the name of the server certificate of the Target Allocator.
 	secretNameServerCertificate = Name + "-targetallocator-server"
+	// secretNameClientCertificate is the name of the server certificate of the Target Allocator.
+	secretNameClientCertificate = Name + "-collector-client"
 
 	// targetAllocatorName is the name of the [otelv1alpha1.TargetAllocator]
 	// resource created by the extension.
@@ -302,6 +304,16 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		return fmt.Errorf("failed generating server certificate secret for target allocator: %w", err)
 	}
 
+	clientSecret, err := secretsManager.Generate(ctx, &secretsutils.CertificateSecretConfig{
+		Name:                        secretNameClientCertificate,
+		CommonName:                  secretNameClientCertificate,
+		CertType:                    secretsutils.ClientCert,
+		SkipPublishingCACertificate: true,
+	}, secretsmanager.SignedByCA(secretNameCACertificate), secretsmanager.Rotate(secretsmanager.InPlace))
+	if err != nil {
+		return fmt.Errorf("failed generating server certificate secret for target allocator: %w", err)
+	}
+
 	// Bundle things up in a managed resource
 	registry := managedresources.NewRegistry(
 		kubernetes.SeedScheme,
@@ -314,7 +326,7 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		a.getTargetAllocatorRoleBinding(ex.Namespace),
 		a.getTargetAllocator(ex.Namespace, caBundleSecret, serverSecret),
 		a.getOtelCollectorServiceAccount(ex.Namespace),
-		a.getOtelCollector(ex.Namespace),
+		a.getOtelCollector(ex.Namespace, caBundleSecret, clientSecret),
 	)
 	if err != nil {
 		return err
@@ -583,8 +595,16 @@ func (a *Actuator) getOtelCollectorServiceAccount(namespace string) *corev1.Serv
 
 // getOTelCollector returns the [otelv1beta1.OpenTelemetryCollector]
 // resource, which the extension manages.
-func (a *Actuator) getOtelCollector(namespace string) *otelv1beta1.OpenTelemetryCollector {
-	obj := &otelv1beta1.OpenTelemetryCollector{
+func (a *Actuator) getOtelCollector(namespace string, caSecret, clientSecret *corev1.Secret) *otelv1beta1.OpenTelemetryCollector {
+	const (
+		volumeNameCACertificate      = "ca-cert"
+		volumeMountPathCACertificate = "/etc/ssl/certs/ca"
+
+		volumeNameClientCertificate      = "client-cert"
+		volumeMountPathClientCertificate = "/etc/ssl/certs/client"
+	)
+
+	return &otelv1beta1.OpenTelemetryCollector{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        otelCollectorName,
 			Namespace:   namespace,
@@ -604,8 +624,16 @@ func (a *Actuator) getOtelCollector(namespace string) *otelv1beta1.OpenTelemetry
 			Mode:            otelv1beta1.ModeStatefulSet,
 			UpgradeStrategy: otelv1beta1.UpgradeStrategyNone,
 			OpenTelemetryCommonFields: otelv1beta1.OpenTelemetryCommonFields{
-				Image:             "otel/opentelemetry-collector:0.141.0", // TODO(dnaeon): this image should be configurable
-				Replicas:          ptr.To(otelCollectorReplicas),
+				Image:    "otel/opentelemetry-collector:0.141.0", // TODO(dnaeon): this image should be configurable
+				Replicas: ptr.To(otelCollectorReplicas),
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: volumeNameCACertificate, MountPath: volumeMountPathCACertificate, ReadOnly: true},
+					{Name: volumeNameClientCertificate, MountPath: volumeMountPathClientCertificate, ReadOnly: true},
+				},
+				Volumes: []corev1.Volume{
+					{Name: volumeNameCACertificate, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: caSecret.Name}}},
+					{Name: volumeNameClientCertificate, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: clientSecret.Name}}},
+				},
 				PriorityClassName: v1beta1constants.PriorityClassNameShootControlPlane100,
 				Resources: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{
@@ -627,9 +655,13 @@ func (a *Actuator) getOtelCollector(namespace string) *otelv1beta1.OpenTelemetry
 						"prometheus": map[string]any{
 							"target_allocator": map[string]any{
 								"collector_id": "${POD_NAME}",
-								// TODO: migrate to the HTTPS endpoint once we have mTLS
-								"endpoint": fmt.Sprintf("http://%s", targetAllocatorServiceName),
-								"interval": "30s",
+								"endpoint":     "https://" + targetAllocatorHTTPSServiceName,
+								"interval":     "30s",
+								"tls": map[string]any{
+									"ca_file":   volumeMountPathCACertificate + "/" + secretsutils.DataKeyCertificateBundle,
+									"cert_file": volumeMountPathClientCertificate + "/" + secretsutils.DataKeyCertificate,
+									"key_file":  volumeMountPathClientCertificate + "/" + secretsutils.DataKeyPrivateKey,
+								},
 							},
 							"config": map[string]any{
 								"scrape_configs": []any{
@@ -694,6 +726,4 @@ func (a *Actuator) getOtelCollector(namespace string) *otelv1beta1.OpenTelemetry
 			},
 		},
 	}
-
-	return obj
 }
