@@ -23,6 +23,7 @@ import (
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	gardenerfeatures "github.com/gardener/gardener/pkg/features"
+	"github.com/gardener/gardener/pkg/utils"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
@@ -31,6 +32,7 @@ import (
 	otelv1alpha1 "github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	otelv1beta1 "github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 	"go.yaml.in/yaml/v4"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -88,7 +90,8 @@ const (
 
 	// targetAllocatorName is the name of the [otelv1alpha1.TargetAllocator]
 	// resource created by the extension.
-	targetAllocatorName = baseResourceName
+	targetAllocatorName           = baseResourceName
+	targetAllocatorDeploymentName = baseResourceName + "-targetallocator"
 	// targetAllocatorServiceName is the name of the Kubernetes service for
 	// the Target Allocator.
 	targetAllocatorServiceName = baseResourceName + "-targetallocator"
@@ -342,7 +345,7 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		a.getTargetAllocatorRole(ex.Namespace),
 		a.getTargetAllocatorRoleBinding(ex.Namespace),
 		a.getTargetAllocatorHTTPSService(ex.Namespace),
-		a.getTargetAllocator(ex.Namespace, caBundleSecret, serverSecret),
+		a.getTargetAllocatorDeployment(ex.Namespace, caBundleSecret, serverSecret),
 		a.getOtelCollectorServiceAccount(ex.Namespace),
 		a.getOtelCollector(ex.Namespace, caBundleSecret, clientSecret, cfg),
 	)
@@ -611,6 +614,7 @@ func (a *Actuator) getTargetAllocatorRoleBinding(namespace string) *rbacv1.RoleB
 }
 
 // getTargetAllocator returns the [otelv1alpha1.TargetAllocator] resource.
+// TODO(dnaeon): get rid of the allocator CR
 func (a *Actuator) getTargetAllocator(namespace string, caSecret, serverSecret *corev1.Secret) *otelv1alpha1.TargetAllocator {
 	const (
 		volumeNameCACertificate      = "ca-cert"
@@ -664,6 +668,87 @@ func (a *Actuator) getTargetAllocator(namespace string, caSecret, serverSecret *
 					MatchLabels: map[string]string{
 						// TODO(dnaeon): additional labels
 						"prometheus": "shoot",
+					},
+				},
+			},
+		},
+	}
+}
+
+// getTargetAllocator returns the [appsv1.Deployment] resource.
+func (a *Actuator) getTargetAllocatorDeployment(namespace string, caSecret, serverSecret *corev1.Secret) *appsv1.Deployment {
+	const (
+		volumeNameCACertificate      = "ca-cert"
+		volumeMountPathCACertificate = "/etc/ssl/certs/ca"
+
+		volumeNameServerCertificate      = "server-cert"
+		volumeMountPathServerCertificate = "/etc/ssl/certs/server"
+
+		volumeNameTargetAllocatorConfig  = "targetallocator-config"
+		volumeMountTargetAllocatorConfig = "/app/targetallocator"
+	)
+
+	// TODO(dnaeon): revisit these labels
+	labels := utils.MergeStringMaps(a.getLabels(), map[string]string{
+		"app.kubernetes.io/component": "opentelemetry-targetallocator",
+	})
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      targetAllocatorDeploymentName,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas:             ptr.To(targetAllocatorReplicas),
+			RevisionHistoryLimit: ptr.To[int32](2),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					PriorityClassName:  v1beta1constants.PriorityClassNameShootControlPlane100,
+					ServiceAccountName: targetAllocatorServiceAccountName,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						RunAsUser:    ptr.To[int64](65532),
+						RunAsGroup:   ptr.To[int64](65532),
+						FSGroup:      ptr.To[int64](65532),
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "ta-container",
+							Image: "otel/target-allocator:v0.140.0", // TODO(dnaeon): this image should be configurable and vendored
+							Args: []string{
+								"--enable-https-server=true",
+								fmt.Sprintf("--config-file=%s/targetallocator.yaml", volumeMountTargetAllocatorConfig),
+								fmt.Sprintf("--https-ca-file=%s/%s", volumeMountPathCACertificate, secretsutils.DataKeyCertificateBundle),
+								fmt.Sprintf("--https-tls-cert-file=%s/%s", volumeMountPathServerCertificate, secretsutils.DataKeyCertificate),
+								fmt.Sprintf("--https-tls-key-file=%s/%s", volumeMountPathServerCertificate, secretsutils.DataKeyPrivateKey),
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("10m"),
+									corev1.ResourceMemory: resource.MustParse("50Mi"),
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: volumeNameCACertificate, MountPath: volumeMountPathCACertificate, ReadOnly: true},
+								{Name: volumeNameServerCertificate, MountPath: volumeMountPathServerCertificate, ReadOnly: true},
+								{Name: volumeNameTargetAllocatorConfig, MountPath: volumeMountTargetAllocatorConfig, ReadOnly: true},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{Name: volumeNameCACertificate, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: caSecret.Name}}},
+						{Name: volumeNameServerCertificate, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: serverSecret.Name}}},
+						{Name: volumeNameTargetAllocatorConfig, VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: targetAllocatorConfigMapName}}}},
 					},
 				},
 			},
@@ -809,7 +894,7 @@ func (a *Actuator) getOtelCollector(namespace string, caSecret, clientSecret *co
 					Telemetry: &otelv1beta1.AnyConfig{
 						Object: map[string]any{
 							"metrics": map[string]any{
-								"level": "basic", // none, basic, normal and detailed levels
+								"level": "detailed", // none, basic, normal and detailed levels
 								"readers": []any{
 									map[string]any{
 										"pull": map[string]any{
@@ -824,7 +909,7 @@ func (a *Actuator) getOtelCollector(namespace string, caSecret, clientSecret *co
 								},
 							},
 							"logs": map[string]any{
-								"level":    "INFO", // INFO, WARN, DEBUG and ERROR levels
+								"level":    "DEBUG", // INFO, WARN, DEBUG and ERROR levels
 								"encoding": "json",
 							},
 						},
