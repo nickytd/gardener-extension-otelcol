@@ -25,6 +25,7 @@ import (
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	gardenerfeatures "github.com/gardener/gardener/pkg/features"
 	"github.com/gardener/gardener/pkg/utils"
+	imagevectorutils "github.com/gardener/gardener/pkg/utils/imagevector"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
@@ -47,6 +48,7 @@ import (
 
 	"github.com/gardener/gardener-extension-otelcol/pkg/apis/config"
 	"github.com/gardener/gardener-extension-otelcol/pkg/apis/config/validation"
+	"github.com/gardener/gardener-extension-otelcol/pkg/imagevector"
 )
 
 const (
@@ -78,6 +80,9 @@ const (
 	// otelCollectorServiceAccountName is the name of the service account
 	// for the OTel Collector.
 	otelCollectorServiceAccountName = otelCollectorName + "-collector"
+	// otelCollectorImageName is the name of the image for OTel Collector in
+	// the image vector.
+	otelCollectorImageName = "otel-collector"
 
 	// secretsManagerIdentity is the identity used for secrets management.
 	secretsManagerIdentity = "gardener-extension-" + Name
@@ -108,6 +113,9 @@ const (
 	// targetAllocatorConfigMapName is the name of the ConfigMap for the
 	// Target Allocator.
 	targetAllocatorConfigMapName = baseResourceName + "-targetallocator-config"
+	// targetAllocatorImageName is the name of the image for Target
+	// Allocator in the image vector.
+	targetAllocatorImageName = "otel-targetallocator"
 )
 
 // Actuator is an implementation of [extension.Actuator].
@@ -316,6 +324,16 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		return fmt.Errorf("failed generating server certificate secret for target allocator: %w", err)
 	}
 
+	taImage, err := imagevector.Images().FindImage(targetAllocatorImageName)
+	if err != nil {
+		return fmt.Errorf("failed to find the image for %s: %w", targetAllocatorImageName, err)
+	}
+
+	collectorImage, err := imagevector.Images().FindImage(otelCollectorImageName)
+	if err != nil {
+		return fmt.Errorf("failed to find the image for %s: %w", otelCollectorImageName, err)
+	}
+
 	// Bundle things up in a managed resource
 	registry := managedresources.NewRegistry(
 		kubernetes.SeedScheme,
@@ -334,9 +352,9 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		a.getTargetAllocatorRole(ex.Namespace),
 		a.getTargetAllocatorRoleBinding(ex.Namespace),
 		a.getTargetAllocatorHTTPSService(ex.Namespace),
-		a.getTargetAllocatorDeployment(ex.Namespace, caBundleSecret, serverSecret),
+		a.getTargetAllocatorDeployment(ex.Namespace, caBundleSecret, serverSecret, taImage),
 		a.getOtelCollectorServiceAccount(ex.Namespace),
-		a.getOtelCollector(ex.Namespace, caBundleSecret, clientSecret, cfg, cluster.Shoot.Spec.Resources),
+		a.getOtelCollector(ex.Namespace, caBundleSecret, clientSecret, cfg, cluster.Shoot.Spec.Resources, collectorImage),
 	)
 	if err != nil {
 		return err
@@ -596,7 +614,7 @@ func (a *Actuator) getTargetAllocatorRoleBinding(namespace string) *rbacv1.RoleB
 }
 
 // getTargetAllocator returns the [appsv1.Deployment] resource.
-func (a *Actuator) getTargetAllocatorDeployment(namespace string, caSecret, serverSecret *corev1.Secret) *appsv1.Deployment {
+func (a *Actuator) getTargetAllocatorDeployment(namespace string, caSecret, serverSecret *corev1.Secret, image *imagevectorutils.Image) *appsv1.Deployment {
 	const (
 		volumeNameCACertificate      = "ca-cert"
 		volumeMountPathCACertificate = "/etc/ssl/certs/ca"
@@ -644,7 +662,7 @@ func (a *Actuator) getTargetAllocatorDeployment(namespace string, caSecret, serv
 					Containers: []corev1.Container{
 						{
 							Name:  "ta-container",
-							Image: "otel/target-allocator:v0.140.0", // TODO(dnaeon): this image should be configurable and vendored
+							Image: image.String(),
 							Args: []string{
 								"--enable-https-server=true",
 								fmt.Sprintf("--config-file=%s/targetallocator.yaml", volumeMountTargetAllocatorConfig),
@@ -748,7 +766,13 @@ func (a *Actuator) getOtelExporters(cfg config.CollectorConfig) map[string]any {
 
 // getOTelCollector returns the [otelv1beta1.OpenTelemetryCollector]
 // resource, which the extension manages.
-func (a *Actuator) getOtelCollector(namespace string, caSecret, clientSecret *corev1.Secret, cfg config.CollectorConfig, resources []gardencorev1beta1.NamedResourceReference) *otelv1beta1.OpenTelemetryCollector {
+func (a *Actuator) getOtelCollector(
+	namespace string,
+	caSecret, clientSecret *corev1.Secret,
+	cfg config.CollectorConfig,
+	resources []gardencorev1beta1.NamedResourceReference,
+	image *imagevectorutils.Image,
+) *otelv1beta1.OpenTelemetryCollector {
 	const (
 		volumeNameCACertificate      = "ca-cert"
 		volumeMountPathCACertificate = "/etc/ssl/certs/ca"
@@ -786,7 +810,7 @@ func (a *Actuator) getOtelCollector(namespace string, caSecret, clientSecret *co
 			Mode:            otelv1beta1.ModeStatefulSet,
 			UpgradeStrategy: otelv1beta1.UpgradeStrategyNone,
 			OpenTelemetryCommonFields: otelv1beta1.OpenTelemetryCommonFields{
-				Image:    "otel/opentelemetry-collector-contrib:0.141.0", // TODO(dnaeon): this image should be configurable
+				Image:    image.String(),
 				Replicas: ptr.To(otelCollectorReplicas),
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: volumeNameCACertificate, MountPath: volumeMountPathCACertificate, ReadOnly: true},

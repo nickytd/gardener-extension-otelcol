@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+images:
+- name: otel-collector
+  sourceRepository: github.com/open-telemetry/opentelemetry-collector
+  repository: otel/opentelemetry-collector
+  tag: "0.141.0"
+- name: otel-targetallocator
+  sourceRepository: https://github.com/open-telemetry/opentelemetry-operator/tree/main/cmd/otel-allocator
+  repository: otel/target-allocator
+  tag: "v0.140.0"
