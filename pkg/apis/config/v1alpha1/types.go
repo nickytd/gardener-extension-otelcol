@@ -10,6 +10,44 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// LogLevel specifies the minimum enabled logging level for the collector.
+//
+// See the following link for more details about the internal collector logger.
+//
+// https://opentelemetry.io/docs/collector/internal-telemetry/#configure-internal-logs
+//
+// +k8s:enum
+type LogLevel string
+
+const (
+	// LogLevelInfo sets the collector's internal logger to INFO level.
+	LogLevelInfo LogLevel = "INFO"
+	// LogLevelWarn sets the collector's internal logger to WARN level.
+	LogLevelWarn LogLevel = "WARN"
+	// LogLevelError sets the collector's internal logger to ERROR level.
+	LogLevelError LogLevel = "ERROR"
+	// LogLevelDebug sets the collector's internal logger to DEBUG level.
+	LogLevelDebug LogLevel = "DEBUG"
+)
+
+// LogEncoding specifies the encoding for the internal collector logger.
+//
+// See the following link for more details about the internal collector logger.
+//
+// https://opentelemetry.io/docs/collector/internal-telemetry/#configure-internal-logs
+//
+// +k8s:enum
+type LogEncoding string
+
+const (
+	// LogEncodingConsole sets the collector's internal logger with console
+	// encoding.
+	LogEncodingConsole LogEncoding = "console"
+	// LogEncodingJSON sets the collector's internal logger with JSON
+	// encoding.
+	LogEncodingJSON LogEncoding = "json"
+)
+
 // MessageEncoding specifies the encoding used by the collector exporters.
 //
 // +k8s:enum
@@ -249,12 +287,36 @@ type CollectorExportersConfig struct {
 	DebugExporter DebugExporterConfig `json:"debug,omitzero"`
 }
 
+// CollectorLogsConfig provides the settings for the collector internal logs.
+//
+// See [Configure internal logs] for more details.
+//
+// [Configure internal logs]: https://opentelemetry.io/docs/collector/internal-telemetry/#configure-internal-logs
+type CollectorLogsConfig struct {
+	// Level specifies the log level of the collector.
+	//
+	// +k8s:optional
+	// +default=ref(LogLevelInfo)
+	Level LogLevel `json:"level,omitzero"`
+
+	// Encoding specifies the encoding for logs of the collector.
+	//
+	// +k8s:optional
+	// +default=ref(LogEncodingConsole)
+	Encoding LogEncoding `json:"encoding,omitzero"`
+}
+
 // CollectorConfigSpec specifies the desired state of [CollectorConfig]
 type CollectorConfigSpec struct {
-	// Exporters specify exporters configuration of the collector.
+	// Exporters specifies the exporters configuration of the collector.
 	//
 	// +k8s:required
 	Exporters CollectorExportersConfig `json:"exporters,omitzero"`
+
+	// Logs specifies the settings for the collector logs.
+	//
+	// +k8s:optional
+	Logs CollectorLogsConfig `json:"logs,omitzero"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

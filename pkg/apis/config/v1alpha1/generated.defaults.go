@@ -68,4 +68,10 @@ func SetObjectDefaults_CollectorConfig(in *CollectorConfig) {
 	if in.Spec.Exporters.DebugExporter.Verbosity == "" {
 		in.Spec.Exporters.DebugExporter.Verbosity = DebugExporterVerbosity(DebugExporterVerbosityBasic)
 	}
+	if in.Spec.Logs.Level == "" {
+		in.Spec.Logs.Level = LogLevel(LogLevelInfo)
+	}
+	if in.Spec.Logs.Encoding == "" {
+		in.Spec.Logs.Encoding = LogEncoding(LogEncodingConsole)
+	}
 }
