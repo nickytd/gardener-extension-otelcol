@@ -9,6 +9,7 @@ import (
 
 	corev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	gardenerfeatures "github.com/gardener/gardener/pkg/features"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -25,17 +26,25 @@ import (
 
 var _ = Describe("Actuator", Ordered, func() {
 	var (
-		// Contain the serialized cloud profile, seed and shoot and provider config
+		// The serialized objects
 		providerConfigData, cloudProfileData, seedData, shootData []byte
 
-		extResource *extensionsv1alpha1.Extension
-		cluster     *extensionsv1alpha1.Cluster
-		decoder     = serializer.NewCodecFactory(scheme.Scheme, serializer.EnableStrict).UniversalDecoder()
-
-		featureGates   = make(map[featuregate.Feature]bool)
+		extResource  *extensionsv1alpha1.Extension
+		cluster      *extensionsv1alpha1.Cluster
+		decoder      = serializer.NewCodecFactory(scheme.Scheme, serializer.EnableStrict).UniversalDecoder()
+		featureGates = map[featuregate.Feature]bool{
+			gardenerfeatures.OpenTelemetryCollector: true,
+		}
 		actuatorOpts   []actuator.Option
 		providerConfig = config.CollectorConfig{
-			Spec: config.CollectorConfigSpec{},
+			Spec: config.CollectorConfigSpec{
+				Exporters: config.CollectorExportersConfig{
+					DebugExporter: config.DebugExporterConfig{
+						Enabled:   ptr.To(true),
+						Verbosity: config.DebugExporterVerbosityNormal,
+					},
+				},
+			},
 		}
 
 		projectNamespace = &corev1.Namespace{
@@ -180,6 +189,28 @@ var _ = Describe("Actuator", Ordered, func() {
 		err = act.Reconcile(ctx, logger, extResource)
 		Expect(err).Should(HaveOccurred())
 		Expect(err).To(MatchError(ContainSubstring("no provider config specified")))
+	})
+
+	It("should fail to reconcile with no exporters configured", func() {
+		emptyProviderConfig := config.CollectorConfig{
+			Spec: config.CollectorConfigSpec{
+				Exporters: config.CollectorExportersConfig{},
+			},
+		}
+
+		data, err := json.Marshal(emptyProviderConfig)
+		Expect(err).NotTo(HaveOccurred())
+		extResource.Spec.ProviderConfig = &runtime.RawExtension{
+			Raw: data,
+		}
+
+		act, err := actuator.New(actuatorOpts...)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(act).NotTo(BeNil())
+
+		err = act.Reconcile(ctx, logger, extResource)
+		Expect(err).Should(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("no exporter enabled")))
 	})
 
 	It("should succeed on Reconcile", func() {
