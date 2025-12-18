@@ -950,7 +950,7 @@ func (a *Actuator) getOtelCollector(
 					Telemetry: &otelv1beta1.AnyConfig{
 						Object: map[string]any{
 							"metrics": map[string]any{
-								"level": "normal", // none, basic, normal and detailed levels
+								"level": string(cfg.Spec.Metrics.Level),
 								"readers": []any{
 									map[string]any{
 										"pull": map[string]any{
@@ -965,8 +965,8 @@ func (a *Actuator) getOtelCollector(
 								},
 							},
 							"logs": map[string]any{
-								"level":    "INFO", // INFO, WARN, DEBUG and ERROR levels
-								"encoding": "json",
+								"level":    string(cfg.Spec.Logs.Level),
+								"encoding": string(cfg.Spec.Logs.Encoding),
 							},
 						},
 					},
