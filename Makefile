@@ -266,3 +266,18 @@ deploy-operator: generate update-version-tags
 undeploy-operator:
 	@$(GO_TOOL) kustomize build $(SRC_ROOT)/examples/operator-extension | \
 		kubectl delete --ignore-not-found=true -f -
+
+.PHONY: create-dev-shoot
+create-dev-shoot:
+	@kubectl apply -f $(SRC_ROOT)/examples/secret-tls.yaml
+	@kubectl apply -f $(SRC_ROOT)/examples/secret-bearer-token.yaml
+	@kubectl apply -f $(SRC_ROOT)/examples/opentelemetry-receiver.yaml
+	@kubectl apply -f $(SRC_ROOT)/examples/shoot.yaml
+
+.PHONY: delete-dev-shoot
+delete-dev-shoot:
+	@kubectl --namespace garden-local annotate shoot local confirmation.gardener.cloud/deletion=true --overwrite
+	@kubectl delete -f $(SRC_ROOT)/examples/shoot.yaml --ignore-not-found=true --wait=false
+	@kubectl delete -f $(SRC_ROOT)/examples/secret-tls.yaml --ignore-not-found=true --wait=false
+	@kubectl delete -f $(SRC_ROOT)/examples/secret-bearer-token.yaml --ignore-not-found=true --wait=false
+	@kubectl delete -f $(SRC_ROOT)/examples/opentelemetry-receiver.yaml --ignore-not-found=true --wait=false
