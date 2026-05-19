@@ -166,6 +166,9 @@ const (
 	resourceProcessorName = "resource"
 )
 
+// readVerbs is the canonical RBAC verb set for read-only access to a resource.
+var readVerbs = []string{"get", "list", "watch"}
+
 // Actuator is an implementation of [extension.Actuator].
 type Actuator struct {
 	client               client.Client
@@ -705,17 +708,17 @@ func (a *Actuator) getTargetAllocatorRole(namespace string) *rbacv1.Role {
 			{
 				APIGroups: []string{""},
 				Resources: []string{"pods", "services", "endpoints", "secrets", "namespaces"},
-				Verbs:     []string{"get", "list", "watch"},
+				Verbs:     readVerbs,
 			},
 			{
 				APIGroups: []string{"discovery.k8s.io"},
 				Resources: []string{"endpointslices"},
-				Verbs:     []string{"get", "list", "watch"},
+				Verbs:     readVerbs,
 			},
 			{
 				APIGroups: []string{"monitoring.coreos.com"},
 				Resources: []string{"servicemonitors", "podmonitors", "scrapeconfigs", "probes"},
-				Verbs:     []string{"get", "list", "watch"},
+				Verbs:     readVerbs,
 			},
 		},
 	}
@@ -1323,7 +1326,7 @@ func (a *Actuator) getEventsClusterRole() *rbacv1.ClusterRole {
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{"events.k8s.io"},
 			Resources: []string{"events"},
-			Verbs:     []string{"get", "list", "watch"},
+			Verbs:     readVerbs,
 		}},
 	}
 }
