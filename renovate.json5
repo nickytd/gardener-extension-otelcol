@@ -20,5 +20,15 @@
         'go.opentelemetry.io/collector/{/,}**',
       ],
     },
+    {
+      description: 'Skip the local-registry dev image stamped into chart values by make update-version-tags; it only resolves inside a developer Kind cluster.',
+      matchDatasources: [
+        'docker',
+      ],
+      matchPackageNames: [
+        'registry.local.gardener.cloud:5001/extensions/gardener-extension-otelcol',
+      ],
+      enabled: false,
+    },
   ],
 }
